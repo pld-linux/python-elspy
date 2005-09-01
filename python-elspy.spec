@@ -10,9 +10,9 @@ Group:		Libraries/Python
 Source0:	http://elspy.sourceforge.net/%{module}-%{version}.tar.gz
 # Source0-md5:	5161553b58eedf8107048d0cd79c2360
 URL:		http://elspy.sourceforge.net/
-BuildRequires:	acl-devel
+BuildRequires:	exim-devel
 %pyrequires_eq	python-libs
-Requires:	exim >= 4.0
+Requires:	exim >= 4.52-4
 BuildRoot:	%{tmpdir}/%{name}-%{version}-root-%(id -u -n)
 
 %description
@@ -25,12 +25,19 @@ simple-but-effective virus detector.
 %prep
 %setup -q -n %{module}-%{version}
 
+%build
+%{__cc} %{rpmcflags} %{rpmldflags} -fPIC -I%{_includedir}/exim -I%{_includedir}/python2.4 \
+        -lpython -shared %{module}.c -o %{module}.so
+
 %install
 rm -rf $RPM_BUILD_ROOT
+install -d $RPM_BUILD_ROOT%{_libdir}/exim
 
 python setup.py install \
 	--root=$RPM_BUILD_ROOT \
 	--optimize=2
+
+install %{module}.so $RPM_BUILD_ROOT%{_libdir}/exim
 
 %clean
 rm -rf $RPM_BUILD_ROOT
@@ -40,3 +47,4 @@ rm -rf $RPM_BUILD_ROOT
 %doc examples/*.py README.txt CHANGES.txt
 %dir %{py_sitescriptdir}/%{module}
 %attr(755,root,root) %{py_sitescriptdir}/%{module}/*.py[co]
+%attr(755,root,root) %{_libdir}/exim/%{module}.so
