@@ -49,7 +49,7 @@ rm -rf $RPM_BUILD_ROOT
 
 %files
 %defattr(644,root,root,755)
-%doc examples/*.py README.txt CHANGES.txt
+%doc examples/*.py README.txt CHANGES.txt doc/API.txt
 %dir %{py_sitescriptdir}/%{module}
 %attr(755,root,root) %{py_sitescriptdir}/%{module}/*.py[co]
 %attr(755,root,root) %{_libdir}/exim/%{module}.so
