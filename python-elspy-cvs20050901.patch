@@ -1,0 +1,1431 @@
+diff -urN elspy-0.1.1.org/CHANGES.txt elspy-0.1.1/CHANGES.txt
+--- elspy-0.1.1.org/CHANGES.txt	2002-10-23 00:52:18.000000000 +0200
++++ elspy-0.1.1/CHANGES.txt	2003-04-09 00:54:20.000000000 +0200
+@@ -15,3 +15,11 @@
+   * Change to accept messages by default if there's any Python
+     problem, not just an import problem.  Made this behaviour a bit more
+     customizable with some #define's at the top of elspy.c
++
++
++0.1.2? 0.2? (?? ??? 2002)
++-------------------------
++
++  * Added elspy.subject_charset module, for rejecting mail with a
++    subject encoded using one of various banned charsets (which are
++    configurable).
+diff -urN elspy-0.1.1.org/elspy.c elspy-0.1.1/elspy.c
+--- elspy-0.1.1.org/elspy.c	2002-10-23 00:43:58.000000000 +0200
++++ elspy-0.1.1/elspy.c	2003-08-24 19:08:32.000000000 +0200
+@@ -58,7 +58,21 @@
+ #define INTERNAL_ERROR_RETURN LOCAL_SCAN_ACCEPT
+ #define ERROR_RETURN LOCAL_SCAN_ACCEPT
+ 
+-static char * __revision__ = "$Id$";
++static char * __revision__ = "$Id$";
++
++
++#ifdef DLOPEN_LOCAL_SCAN
++/* Return the version of the local_scan ABI, if being compiled as a .so */
++int local_scan_version_major(void)
++{
++  return LOCAL_SCAN_ABI_VERSION_MAJOR;
++}
++
++int local_scan_version_minor(void)
++{
++  return LOCAL_SCAN_ABI_VERSION_MINOR;
++}
++#endif
+ 
+ 
+ /* ----------------------------------------------------------------------
+@@ -247,6 +261,7 @@
+    mod = Py_InitModule("_elspy", elspy_methods);
+ 
+    /* Add necessary constants to module's dictionary. */
++   /* XXX should use PyModule_AddIntConstant() here! */
+    mod_dict = PyModule_GetDict(mod);
+    PyDict_SetItemString(mod_dict, "LOCAL_SCAN_ACCEPT",
+                         PyInt_FromLong((long) LOCAL_SCAN_ACCEPT));
+@@ -352,15 +367,12 @@
+    mod_dict = PyModule_GetDict(module);
+    func = PyDict_GetItemString(mod_dict, func_name);
+ 
+-   if (func) {
+-      if (! PyCallable_Check(func)) {
+-         log_error("error: %s object in %s module not callable",
+-                   func_name, mod_name);
+-         return NULL;
+-      }
+-      else
+-         return func;
++   if (func != NULL && !PyCallable_Check(func)) {
++      log_error("error: %s object in %s module not callable",
++		func_name, mod_name);
++      return NULL;
+    }
++   return func;
+ }
+ 
+ 
+@@ -509,6 +521,48 @@
+ }
+ 
+ 
++#if DEBUG_LEVEL > 3
++void dump_sys_module ()
++{
++   PyObject * sys_mod; 
++   PyObject * sys_executable; 
++   PyObject * sys_version; 
++   PyObject * sys_path; 
++   PyObject * cur_dir; 
++ 
++   sys_mod = PyImport_ImportModule("sys"); 
++   if (sys_mod == NULL)  
++      return; 
++   log_debug(3, "sys module: %s", PyString_AsString(PyObject_Repr(sys_mod))); 
++ 
++   /* show sys.executable (just curious) */ 
++   sys_executable = PyObject_GetAttrString(sys_mod, "executable"); 
++   if (sys_executable != NULL) 
++      log_debug(3, "sys.executable: >%s<", PyString_AsString(sys_executable)); 
++ 
++   /* show sys.version */ 
++   sys_version = PyObject_GetAttrString(sys_mod, "version"); 
++   if (sys_version != NULL) 
++      log_debug(3, "sys.version: >%s<", PyString_AsString(sys_version)); 
++ 
++   /* and sys.path */ 
++   sys_path = PyObject_GetAttrString(sys_mod, "path"); 
++   if (sys_path != NULL) { 
++      int n, i; 
++      n = PySequence_Size(sys_path); 
++      log_debug(3, "sys.path has %d elements", n); 
++ 
++      for (i = 0; i < n; i++) { 
++         cur_dir = PySequence_GetItem(sys_path, i); 
++         log_debug(3, "sys.path[%d] = %s", i,
++                   PyString_AsString(PyObject_Repr(cur_dir)));
++      } 
++   } 
++}
++#else
++#define dump_sys_module()
++#endif
++
+ static int py_initialized = 0;
+ 
+ int
+@@ -535,6 +589,7 @@
+    }
+ 
+    /* Import the elspy package. */
++   dump_sys_module();
+    log_debug(1, "attempting to import module 'elspy'");
+    elspy_mod = PyImport_ImportModule("elspy");
+    if (elspy_mod == NULL) {
+@@ -662,12 +717,3 @@
+    return result;
+ 
+ }
+-
+-#ifdef DLOPEN_LOCAL_SCAN
+-/* Return the verion of the local_scan ABI, if being compiled as a .so */
+-int
+-local_scan_version(void)
+-{
+-    return LOCAL_SCAN_ABI_VERSION ;
+-}
+-#endif
+diff -urN elspy-0.1.1.org/lib/bogus_date.py elspy-0.1.1/lib/bogus_date.py
+--- elspy-0.1.1.org/lib/bogus_date.py	2002-10-22 00:20:14.000000000 +0200
++++ elspy-0.1.1/lib/bogus_date.py	2003-04-08 01:12:04.000000000 +0200
+@@ -2,7 +2,7 @@
+ #
+ # This code is based on a strict interpretation of RFC 2822 section 3.3;
+ # the idea is to reject *any* sort of bogosity in the "Date:" header:
+-#   
++#
+ #   * invalid syntax, eg. any of the following would be rejected:
+ #       "Mon 1 Jul 2002 10:11:41 -0400"  (missing comma)
+ #       "Mon,  1 Jul 2002 10:11:41"      (missing timezone)
+@@ -22,7 +22,7 @@
+ #
+ #   * too far ahead of the current date; configurable by editing
+ #     MESSAGE_TOO_NEW below
+-# 
++#
+ 
+ # Implementation notes.
+ #
+@@ -45,7 +45,7 @@
+ #
+ # The elspy home page is at http://elspy.sourceforge.net/ .
+ 
+-__revision__ = "$Id$"
++__revision__ = "$Id$"
+ 
+ import re
+ from time import time, localtime, gmtime, mktime, asctime
+@@ -211,7 +211,7 @@
+     # remote timezone out of the "Date" header, it's easy to adjust
+     # this bogus time value to get the correct time that the "Date"
+     # header represents, as seconds since epoch UTC.
+-    # 
++    #
+     # Given that, it's a simple subtraction to compute the difference
+     # between the "Date" header and the current time, and reject the
+     # message if the "Date" header is wildly off.  The definition of
+diff -urN elspy-0.1.1.org/lib/defanged_virus.py elspy-0.1.1/lib/defanged_virus.py
+--- elspy-0.1.1.org/lib/defanged_virus.py	1970-01-01 01:00:00.000000000 +0100
++++ elspy-0.1.1/lib/defanged_virus.py	2005-05-19 01:51:03.000000000 +0200
+@@ -0,0 +1,172 @@
++# elspy library -- detection of defanged viruses
++#
++# This code is intended to detect and reject defanged viruses,
++# as well as related junk like "caught a virus for you" or
++# "you sent us a virus" messages.  Virus detection software that
++# sends *more* mail just perpetuates the problem; the authors
++# of such software are only one step up from virus authors and
++# will be up against the wall (right after spammers) when the
++# revolution comes.
++#
++# Naturally, this is a hodge-podge of heuristic hacks.  I very
++# much doubt there's any nice way to do it.
++
++# Copyright (c) 2003 Gregory P. Ward.  All rights reserved.
++# See README.txt for licensing information.
++#
++# The elspy home page is at http://elspy.sourceforge.net/ .
++
++__revision__ = "$Id$"
++
++
++import re
++from elspy.util import RejectVirusRelated, RejectVirus, parse_message
++
++
++INTERSCAN_SUBJECT = "InterScan NT Alert"
++INTERSCAN_BODY = "Receiver, InterScan has detected virus(es) in the e-mail attachment."
++INTERSCAN_FILENAME = "InterScan_SafeStamp.txt"
++
++# Rejection messages (consistency is good!)
++REJECT_DEFANGED = "defanged viruses not wanted here"
++REJECT_ALERT = "virus alerts not wanted here"
++REJECT_NOTIFICATION = "misguided virus notifications not wanted here"
++
++
++def local_scan (info, headers, fd, msg=None):
++    if msg is None:
++        msg = parse_message(headers, fd, onerror="raise")
++
++    html_body = plain_body = None
++    attach_names = []
++    if msg.is_multipart():
++        for part in msg.walk():
++            name = (part.get_param('name') or
++                    part.get_param('filename',
++                                   header='content-disposition'))
++            if name:
++                attach_names.append(name)
++
++            part_type = part.get_type()
++            if html_body is None and part_type == "text/html":
++                html_body = part.get_payload().strip()
++            elif plain_body is None and part_type == "text/plain":
++                plain_body = part.get_payload().strip()
++
++        body = plain_body or html_body or ""
++    else:
++        plain_body = body = msg.get_payload().strip()
++
++    subject = msg.get('subject', '')
++
++    # Number One offender: InterScan NT Alert, which doubles your
++    # pleasure by first sending you a "Virus detected" notice,
++    # and *then* sending the defanged virus itself.  Arrghh!
++    # First, reject the "virus detected" message based on the
++    # subject and first line of the body.
++    if (subject == INTERSCAN_SUBJECT and
++        plain_body and
++        plain_body.startswith(INTERSCAN_BODY)):
++        raise RejectVirusRelated(REJECT_ALERT)
++
++    # Now the second half: viruses defanged by InterScan.  
++    if INTERSCAN_FILENAME in attach_names:
++        raise RejectVirusRelated(REJECT_DEFANGED)
++
++    # InterScan also has the wonderful feature of notifying
++    # user@example.com that he sent a virus when, of course, the virus
++    # just forged that sender address.  Sigh.
++    if (subject.startswith("Failed to clean virus file") and
++        plain_body and
++        plain_body.startswith("The file you have sent was infected with a virus")):
++        raise RejectVirusRelated(REJECT_NOTIFICATION)
++
++    if (subject == "Virus Alert !" and
++        body.find("McAfee.com Has recieved an infected message from you") != -1):
++        raise RejectVirusRelated(REJECT_NOTIFICATION)
++
++    if (subject.startswith("Warning: A possible virus has been detected in one of your messages.") and
++        body.startswith("A virus or an infected file has been detected in a message:")):
++        raise RejectVirusRelated(REJECT_NOTIFICATION)
++
++    if (subject.startswith("MailMarshal has detected a Virus") and
++        body.startswith("MailMarshal (an automated content monitoring gateway) has stopped")):
++        raise RejectVirusRelated(REJECT_NOTIFICATION)
++
++    if (subject.startswith("Your mail server sent us a virus") and
++        body.find("Declude")):
++        raise RejectVirusRelated(REJECT_NOTIFICATION)
++
++    if (subject.startswith("RAV AntiVirus") and
++        re.search(r"This e-mail is generated by the \S+ mail server to warn you that the e-mail", body)):
++        raise RejectVirusRelated(REJECT_NOTIFICATION)
++
++    if (subject.startswith("Your mail server sent us a virus!") and
++        body.startswith("The anti-virus servers of IDnet detected")):
++        raise RejectVirusRelated(REJECT_NOTIFICATION)
++
++    if (subject == "Virus intercepted" and
++        body.startswith("A message you sent to")):
++        raise RejectVirusRelated(REJECT_NOTIFICATION)
++
++    # Oh great, they come in Italian too.
++    if (subject == "ATTENZIONE: Virus trovato" and
++        body.startswith("I software anti-virus presenti sul nostro server")):
++        raise RejectVirusRelated(REJECT_NOTIFICATION)
++
++    if subject.find("WARNING: YOU MAY HAVE A VIRUS") != -1:
++        raise RejectVirusRelated(REJECT_NOTIFICATION)
++
++    if subject.find("Inflex scan report") != -1:
++        raise RejectVirusRelated(REJECT_NOTIFICATION)
++
++    if subject.find("This is an alert from eSafe") != -1:
++        raise RejectVirusRelated(REJECT_NOTIFICATION)
++
++    
++
++    # Something called MailScanner adds a header stating that it found a
++    # virus, and then just passes the whole thing on intact.  Duh.
++    mailscanner = msg.get('x-mailscanner', '')
++    if (mailscanner.lower().find("found to be infected") != -1):
++        raise RejectVirusRelated("viruses not wanted here")
++
++    if (subject.startswith("Virus Detected by Network Associates") and
++        body.startswith("Network Associates WebShield") and
++        body.find("detected virus") != -1):
++        raise RejectVirusRelated(REJECT_DEFANGED)
++
++    if ("DELETED0.TXT" in attach_names or
++        "Norton AntiVirus Deleted1.txt" in attach_names):
++        raise RejectVirusRelated(REJECT_DEFANGED)
++
++    if msg['X-SpamHunter'] == "Found to be infected":
++        raise RejectVirusRelated("viruses not wanted here")
++
++    if body.strip().startswith("RAV AntiVirus has deleted this file"):
++        raise RejectVirusRelated(REJECT_DEFANGED)
++
++    if ("WARNING.TXT" in attach_names and
++        body.startswith("WARNING: This e-mail has been altered by MIMEDefang.")):
++        raise RejectVirusRelated(REJECT_DEFANGED)
++
++    if body.find("NOTICE: One or more files attached to this message "
++                 "were found to contain a malicious virus") != -1:
++        raise RejectVirusRelated(REJECT_DEFANGED)
++
++    if body.find("VIRUS INFECTION ALERT") != -1:
++        raise RejectVirusRelated(REJECT_DEFANGED)
++
++    # Detect W32/Palyh and W32.Sobig.F@mm viruses.  This isn't really a
++    # "defanged" virus (AFAIK), but it doesn't bear the usual signature,
++    # ie. a Windows executable attachment, and it's easiest to catch
++    # using the machinery in this module.
++    if (plain_body == "All information is in the attached file." or
++        plain_body == "Please see the attached file." or
++        plain_body == "See the attached file for details"):
++        payload = msg.get_payload()
++        # Make sure message has the same MIME structure as W32/Palyh
++        if (msg.get_type() == "multipart/mixed" and
++            len(payload) == 1 and
++            payload[0].get_type() == "text/plain"):
++            raise RejectVirus("W32/Palyh or W32.Sobig.F@mm virus detected")
+diff -urN elspy-0.1.1.org/lib/execontent_simple.py elspy-0.1.1/lib/execontent_simple.py
+--- elspy-0.1.1.org/lib/execontent_simple.py	2002-10-22 00:20:14.000000000 +0200
++++ elspy-0.1.1/lib/execontent_simple.py	2004-07-02 15:03:43.000000000 +0200
+@@ -30,10 +30,10 @@
+ #
+ # The elspy home page is at http://elspy.sourceforge.net/ .
+ 
+-__revision__ = "$Id$"
++__revision__ = "$Id$"
+ 
+ import os, re
+-from elspy import RejectMessage, get_fdpos, set_fdpos
++from elspy import RejectVirus, get_fdpos, set_fdpos
+ 
+ 
+ BAD_EXTENSIONS = ("vbs", "vbe", "wsf", "wsh", "js", "jse",
+@@ -72,26 +72,72 @@
+                        flags|re.MULTILINE)
+ 
+ 
++def check_sober_h(info, headers, fd):
++    # Boy, these anti-immigration Germans are really starting to bug me...
++    banned_prefixes = ["Bankrott des Gesundheitswesens durch Auslaender!",
++                       "Wer an ein Tabu ruehrt, muss und darf vernichtet werden",
++                       "EU Beitritt der Tuerkei ?",
++                       "Bin ich zu weltfremd? Ich glaube wohl kaum",
++                       "Die Deform der sozialen Ordnung",
++                       "Moschee-Bau in Deutschland",
++                       "Augen auf! (So sieht es aus!)",
++                       "Paradies Bundesrepublik - Rente fuer die Welt -",
++                       "Libanesen in Berlin",
++                       "Garather klagen ueber eskalierende Gewalt im Stadtteil!",
++                       "Auslaender erschleichen sich zunehmend Sozialleistungen",
++                       "Auslaenderkriminalitaet steigt weiter!",
++                       "Das kann unmoeglich sein -Leserbrief-",
++                       "Nein zum Zuwanderungsgesetz !",
++                       "Skandalurteil in Darmstadt",
++                       "Auf Kosten der deutschen Beitragszahler und Rentner!",
++                       "Wir haben die Auslaender doch geholt?!",
++                       "TUERKEN-TERROR AM HIMMELFAHRTSTAG",
++                       "MULTI-KULTI-BANDE TYRANNISIERTE MITSCHUELER",
++                       "ASYLANTEN BEGRABSCHTEN DEUTSCHES MAEDCHEN",
++                       "Was Deutschland braucht, sind deutsche Kinder!",
++                       "Diplomatische Zensur",
++                       "EU gibt Erwerbslosen volle Freizuegigkeit",
++                       "Richter unterstuetzt kriminelle Auslaenderin",
++                       "Auslaenderanteile in Schweizer Gefaengnissen",
++                       "Augen auf! (So sieht es aus!)",
++                       "Neue Voelkerwanderung droht!",
++                       "Mehr fuer Auslaender als fuer Deutsche tun!",
++		       "Skandal in Berlin",
++		       "Auslaendergewalt: Herr Rau, wo waren Sie?",
++		       "Marokkanischer Wiederholungstaeter vergewaltigte 17-jaehriges Maedel",
++		       "DEUTSCHES MAEDCHEN FAST VERGEWALTIGT",
++		       "So sieht die Wahrheit aus!",
++		       "Geschrieben von Margrit",
++                       ]
++    subject = headers.get("Subject", "").strip()
++    for prefix in banned_prefixes:
++        if subject.startswith(prefix):
++	    raise RejectVirus("looks like Sober.h virus")
++
++
+ def check_filename (match, what):
+     if match is None:
+         return
+     fn = match.group('fn1') or match.group('fn2')
+     ext = match.group('ext1') or match.group('ext2')
+     if ext.lower() in BAD_EXTENSIONS:
+-        raise RejectMessage(
++        raise RejectVirus(
+             "message rejected -- looks like a virus\n"
+             "(name of %s (%r) indicates executable content)"
+             % (what, fn))
+ 
+ def local_scan (info, headers, fd):
+ 
++    # Easy check for Sober.h virus (German far-right propaganda virus)
++    check_sober_h(info, headers, fd)
++
+     # First check the message's "Content-type" header, to handle the
+     # case of a message whose entire body is a Windows executable.
+     ctype = headers.get("Content-type")
+     if ctype:
+         match = msgname_re.search(ctype)
+         check_filename(match, "message body")
+-    
++
+     # Read in the first chunk (32k by default) of the message body, and
+     # scan it for evil attachments or uuencoded files.
+     fpos = get_fdpos(fd)
+@@ -130,5 +176,5 @@
+     assert fn == fn2[1:-1], "%r != %r" % (fn, fn2[1:-1])
+     assert ext == "scr" and ext.lower() in BAD_EXTENSIONS
+ 
+-    
+-    
++
++
+diff -urN elspy-0.1.1.org/lib/execontent_smart.py elspy-0.1.1/lib/execontent_smart.py
+--- elspy-0.1.1.org/lib/execontent_smart.py	1970-01-01 01:00:00.000000000 +0100
++++ elspy-0.1.1/lib/execontent_smart.py	2004-07-28 02:56:09.000000000 +0200
+@@ -0,0 +1,106 @@
++# elspy library -- smart detection of evil attachments
++#
++# This is based on Neil Schemenauer's qmail-queue wrapper to reject
++# messages with executable attachments:
++#   http://arctrix.com/~nas/misc/qmail-filter-exe.py
++#
++# It parses the message's MIME structure, looks at the name of
++# each attachment, and rejects the whole message if there are
++# any attachments with suspicious-looking names.
++
++# Copyright (c) 2003 Gregory P. Ward.  All rights reserved.
++# See README.txt for licensing information.
++#
++# The elspy home page is at http://elspy.sourceforge.net/ .
++
++__revision__ = "$Id$"
++
++import re
++from cStringIO import StringIO
++import struct
++from zipfile import ZipFile, BadZipfile
++from elspy.util import parse_message, RejectVirus
++from elspy.execontent_simple import BAD_EXTENSIONS
++
++# %s expands to eg. "vbs|vbe|wsf|..." (depending on BAD_EXTENSIONS).
++# Regex is compiled lazily so outside code can tweak BAD_EXTENSIONS.
++fname_pat = r'\.(%s)\b'
++fname_re = None
++
++def is_executable (data):
++    """
++    Return true if 'data' (which should be the initial contents of
++    a file) signifies a Windows executable.
++    """
++    if not data:
++        return 0
++    return len(data) > 24 and data[0:2] == "MZ" and data[24] == "@"
++
++def scan_zipfile (attach_name, attachment):
++    try:
++        file = StringIO(attachment.get_payload(decode=1))
++        zipfile = ZipFile(file)
++
++        # Iterate over all files in the ZIP file; if any of them look like a
++        # Windows executable (either by name or contents), reject the whole
++        # message.
++        names = zipfile.namelist()
++        for name in names:
++            # The name gives it away (too easy!)
++            if fname_re.search(name):
++                raise RejectVirus(
++                    "message rejected -- looks like a virus\n"
++                    "(attachment %r contains executable file %r)"
++                    % (attach_name, name))
++
++            # OK, let's look at the content of the file.  If it looks like
++            # a Windows executable, then reject it.
++            contents = zipfile.read(names[0])
++            if is_executable(contents):
++                raise RejectVirus(
++                    "message rejected -- looks like a virus\n"
++                    ("attachment %r contains a Windows executable file"
++                     % attach_name))
++    except (BadZipfile, RuntimeError, struct.error), err:
++        raise RejectVirus("message rejected -- looks like a virus\n"
++                          "(contains an invalid ZIP file attachment)")
++
++
++
++def local_scan (info, headers, fd, msg=None):
++    global fname_pat, fname_re
++    if msg is None:
++        msg = parse_message(headers, fd)
++
++    if fname_re is None:
++        fname_re = re.compile(fname_pat % '|'.join(BAD_EXTENSIONS),
++                              re.IGNORECASE)
++
++    i = 0
++    for part in msg.walk():
++        # Only interested in the leaves of the tree
++	i += 1
++	if part.is_multipart():
++            continue
++
++        attachname = (part.get_param('name') or
++                      part.get_param('filename',
++                                     header='content-disposition'))
++        if attachname and fname_re.search(attachname):
++            # Look paw -- I caught me a virus!
++            raise RejectVirus(
++                "message rejected -- looks like a virus\n"
++                "(attachment name %r indicates executable content)"
++                % attachname)
++
++        # Check for executables embedded in ZIP file.
++        elif attachname and attachname.lower().endswith(".zip"):
++            scan_zipfile(attachname, part)
++
++        elif is_executable(part.get_payload(decode=1)):
++            if attachname:
++                why = "(attachment %r is executable on Windows)" % attachname
++            else:
++                why = "(contains an attachment executable on Windows)"
++            raise RejectVirus("message rejected -- looks like a virus\n" +
++                              why)
+diff -urN elspy-0.1.1.org/lib/__init__.py elspy-0.1.1/lib/__init__.py
+--- elspy-0.1.1.org/lib/__init__.py	2002-10-23 00:55:30.000000000 +0200
++++ elspy-0.1.1/lib/__init__.py	2003-04-09 00:57:57.000000000 +0200
+@@ -9,9 +9,9 @@
+ #
+ # The elspy home page is at http://elspy.sourceforge.net/ .
+ 
+-__revision__ = "$Id$"
++__revision__ = "$Id$"
+ 
+-__version__ = "0.1.1"
++__version__ = "0.2pre"
+ 
+ import sys
+ from traceback import format_exception
+@@ -80,7 +80,4 @@
+ # Other useful stuff lives in util.py -- import it from there
+ # so local_scan() authors don't have to know about
+ # the internal structure of this package.
+-from elspy.util import \
+-     MessageDisposition, AcceptMessage, RejectMessage, TempRejectMessage, \
+-     log_error, log_warning, get_fdpos, set_fdpos, \
+-     HeaderList, EximInfo
++from elspy.util import *
+diff -urN elspy-0.1.1.org/lib/maildir.py elspy-0.1.1/lib/maildir.py
+--- elspy-0.1.1.org/lib/maildir.py	2002-10-22 00:20:14.000000000 +0200
++++ elspy-0.1.1/lib/maildir.py	2003-04-19 03:30:59.000000000 +0200
+@@ -11,7 +11,7 @@
+ #
+ # The elspy home page is at http://elspy.sourceforge.net/ .
+ 
+-__revision__ = "$Id$"
++__revision__ = "$Id$"
+ 
+ import os
+ import socket
+@@ -143,13 +143,13 @@
+         """close_message(msgfile : MessageFile)
+ 
+         Finish writing a message to the Maildir: closes the file
+-        descriptor and moves the message file from 'tmp' to 'cur'
+-        in the Maildir.
++        descriptor and moves the message file from "tmp" to 'dest'
++        (default "new") in the Maildir.
+         """
+         # Close the message file
+         msgfile.flush()
+         msgfile.file.close()
+-        
++
+         # Start renaming the message file: link $dest/$basename name to
+         # tmp/$basename.
+         tmp_name = self.join("tmp", msgfile.basename)
+@@ -249,4 +249,4 @@
+     mf.write("body here\n")
+     md.close_message(mf, dest="cur", status="2,S")
+     mf.cleanup()
+-    
++
+diff -urN elspy-0.1.1.org/lib/routespam.py elspy-0.1.1/lib/routespam.py
+--- elspy-0.1.1.org/lib/routespam.py	2002-10-22 00:20:14.000000000 +0200
++++ elspy-0.1.1/lib/routespam.py	2003-06-15 21:50:18.000000000 +0200
+@@ -31,11 +31,12 @@
+ #
+ # The elspy home page is at http://elspy.sourceforge.net/ .
+ 
+-__revision__ = "$Id$"
++__revision__ = "$Id$"
+ 
+ import os, socket, time, errno
+-from elspy import get_fdpos, set_fdpos, log_write, LOG_REJECT
+-from elspy.maildir import Maildir
++from elspy.util import get_fdpos, set_fdpos, save_message
++from elspy import log_write, LOG_REJECT
++
+ 
+ ROUTESPAM_ADDRS = []
+ 
+@@ -44,20 +45,9 @@
+ SPAM_FOLDER_UMASK = 077
+ 
+ 
++# This lives on for backwards compatibility.
+ def save_spam (folder, body_fd, headers, recips, sender):
+-    mdir = Maildir(folder,
+-                   dir_mode=0777 & ~SPAM_FOLDER_UMASK,
+-                   file_mode=0666 & ~SPAM_FOLDER_UMASK)
+-    msgfile = mdir.open_message()
+-    pos = get_fdpos(body_fd)
+-    try:
+-        msgfile.write("Return-Path: <%s>\n" % sender)
+-        msgfile.write("Envelope-To: %s\n" % ", ".join(recips))
+-        mdir.write_message(headers, body_fd, msgfile)
+-        mdir.close_message(msgfile)
+-    finally:
+-        msgfile.cleanup()
+-        set_fdpos(body_fd, pos)
++    save_message(folder, headers, body_fd, recips, sender, SPAM_FOLDER_UMASK)
+ 
+ def local_scan (info, headers, fd):
+     routespam_addr = {}
+diff -urN elspy-0.1.1.org/lib/spamassassin.py elspy-0.1.1/lib/spamassassin.py
+--- elspy-0.1.1.org/lib/spamassassin.py	2002-10-22 00:20:14.000000000 +0200
++++ elspy-0.1.1/lib/spamassassin.py	2003-04-08 01:12:06.000000000 +0200
+@@ -5,12 +5,12 @@
+ # all that's needed is to open a socket to spamd, feed it the message
+ # headers and body, and read the results.  This saves the overhead
+ # of spawning spamc.
+-# 
++#
+ # If the score returned by spamd is high enough (configured by setting
+ # REJECT_THRESHOLD below), the message is rejected.  Otherwise, we tack
+ # on a couple of headers so that other local agents can use the results
+ # of SpamAssassin's analysis.
+-# 
++#
+ # Specifically, we add the following headers to all accepted messages,
+ # regardless of their spam score:
+ #   X-Spam-Status
+@@ -35,7 +35,7 @@
+ # Furthermore, if spamd considers the message spammy, but not spammy
+ # enough to be rejected, we add
+ #   X-Spam-Flag: YES
+-# 
++#
+ # (Unfortunately, we don't add "X-Spam-Report" because there doesn't
+ # appear to be an easy way to get both the list of tests and
+ # the spam report out of spamd.  Sigh.)
+@@ -45,7 +45,7 @@
+ #
+ # The elspy home page is at http://elspy.sourceforge.net/ .
+ 
+-__revision__ = "$Id$"
++__revision__ = "$Id$"
+ 
+ import os, re, errno
+ from socket import socket, AF_INET, SOCK_STREAM, error as SocketError
+diff -urN elspy-0.1.1.org/lib/spambayes_.py elspy-0.1.1/lib/spambayes_.py
+--- elspy-0.1.1.org/lib/spambayes_.py	1970-01-01 01:00:00.000000000 +0100
++++ elspy-0.1.1/lib/spambayes_.py	2003-06-15 21:51:12.000000000 +0200
+@@ -0,0 +1,355 @@
++# elspy library -- pass a message through Spambayes
++#
++# This local_scan() sort-of emulates the hammie.py script
++# included with Spambayes, with the added twist that it
++# can evaluate a message with N recipients under N scoring databases,
++# and only reject it should be rejected for *all* recipients.
++
++# ARGH!  This module cannot be called simply "elspy.spambayes",
++# because then it conflicts with the top-level "spambayes" package.
++# Stupid relative imports.  ;-(
++
++import os, re
++from fnmatch import fnmatch
++from elspy.util import parse_message, save_message, RejectSpam
++from elspy import log_write, LOG_REJECT, LOG_MAIN
++
++__revision__ = "$Id$"
++
++
++# Base directory for Spambayes stuff: databases, config files, ...
++SPAMBAYES_BASEDIR = None
++
++# Default config file: use this for all recipients.  (Per-recipient
++# config file not implemented yet.)  This is a filename relative
++# to SPAMBAYES_BASEDIR.
++SPAMBAYES_GLOBAL_CONFIG = None
++
++# File that defines the mapping of recipient address to training corpus.
++SPAMBAYES_CLUSTER_FILE = None
++
++# Directory for training databases: for recipient foo@example.com,
++# will look for file "foo@example.com" in SPAMBAYES_DBDIR.  If
++# that's not found, will use file "default".  If "default" not found,
++# message will not be checked for this recipient.
++SPAMBAYES_DBDIR = None
++
++# Base directory for saving messages.
++SPAMBAYES_SAVEDIR = None
++
++
++verp_addr_re = re.compile(r'(\S+-(?:bounces|confirm))\+[^@]+\@(\S+)')
++
++class Aliases:
++    """
++    Keep track of which recipient addresses are personal, and which
++    are simple aliases for other local addresses.
++    """
++
++    def __init__(self):
++        self.domains = ["python.org",
++                        "zope.org",
++                       ]
++        self.personal_addrs = {}
++        self.simple_aliases = {}
++
++        # The set of all recipient addresses in the system.
++        self.recipients = {}
++
++        # The set of "standalone" addresses, ie. addresses that don't
++        # belong to any cluster and have their own training corpus.
++        self.standalone = {}
++
++        # Map "cluster name" (there will be one training corpus per
++        # cluster of recipient addresses) to the list of addresses in
++        # the cluster.
++        self.clusters = {}
++
++    def read_aliases(self, domain, filename):
++        file = open(filename)
++        comment_re = re.compile(r'#.*')
++        singleton_alias_re = re.compile(r'([\w\-\.]+)\s*:\s*([\w\@\.\-]+)\s*$')
++        state = None
++
++        for line in file:
++            if line.startswith("# START PERSONAL"):
++                state = "personal"
++            elif line.startswith("# END PERSONAL"):
++                state = None
++
++            line = comment_re.sub('', line).rstrip()
++            if not line:
++                continue
++
++            # Look for eg. "foo: bar" or "foo: bar@example.com"
++            match = singleton_alias_re.match(line)
++            if match:
++                (alias, target) = match.groups()
++                alias = alias + "@" + domain
++                if state == "personal" and "@" in target:
++                    self.personal_addrs[alias] = target
++                elif "@" not in target:
++                    self.simple_aliases[alias] = target + "@" + domain
++
++    def is_personal (self, addr):
++        return self.personal_addrs.has_key(addr)
++
++    def get_personal (self):
++        return self.personal_addrs.keys()
++
++    def get_alias (self, addr):
++        return self.simple_aliases.get(addr, addr)
++
++    def _dump_aliases(self, aliases):
++        addrs = aliases.keys()
++        addrs.sort()
++        for addr in addrs:
++            print "%-40.40s %s" % (addr, aliases[addr])
++
++    def dump(self):
++        print "personal addresses:"
++        self._dump_aliases(self.personal_addrs)
++
++        print
++        print "simple aliases:"
++        self._dump_aliases(self.simple_aliases)
++
++    def add_recip(self, addr):
++        self.recipients[addr] = 1
++
++    def assign_addr(self, addr, cluster=None):
++        """
++        Assign recipient address 'addr' to 'cluster', or mark it
++        standalone if no cluster supplied.
++        """
++        if cluster:
++            self.cluster.setdefault(cluster, []).append(addr)
++        else:
++            self.standalone[recip] = 1
++
++# class Aliases
++
++class Clusters:
++
++    """
++    Instance attributes:
++      filename : str
++      patterns : [ (localpart_pattern:str, domain_pattern:str, cluster:str) ]
++        canonical definition of how to map recipient addresses to
++        clusters: the first (localpart_pattern, domain_pattern) that
++        matches an address determines the cluster to which that address
++        belongs
++      recip_cache : { recip:str : cluster:str }
++        cache built up as we look at recipient addresses and decide
++        which cluster they belong to (saves crawling the clusters
++        list for every single occurence of each recipient address)
++    """
++
++    def __init__ (self, filename, aliases):
++        self.filename = filename
++        self.aliases = aliases
++        self.patterns = []
++        self.recip_cache = {}
++
++        self.read_clusters()            # fill in 'patterns' list
++
++    def warn (self, line_num, msg):
++        sys.stderr.write("warning: %s, line %d: %s\n"
++                         % (self.filename, line_num, msg))
++
++    def read_clusters (self):
++        file = open(self.filename)
++        line_num = 0
++        cluster = None                  # for continuation lines
++
++        for line in file:
++            line_num += 1
++            if '#' in line:
++                line = line[:line.find('#')]
++            line = line.rstrip()
++            if not line:                # blank or all comment
++                cluster = None
++                continue
++
++            if line[0] in ' \t':        # continuation line
++                if cluster is None:
++                    self.warn(line_num, "invalid continuation line")
++                    continue
++                self.add_cluster(cluster, line.split())
++
++            elif ':' in line:           # regular "cluster: recip ..." line
++                (cluster, recips) = re.split(r'\s*:\s*', line, 1)
++                self.add_cluster(cluster, recips.split())
++
++            else:
++                self.warn(line_num, "unrecognized line")
++
++    def simplify_addr (self, addr):
++        # Reduce "foo-list-bounces+...@domain" to "foo-list-bounces@domain"
++        match = verp_addr_re.search(addr)
++        if match:
++            return "%s@%s" % match.group(1, 2)
++        else:
++            return addr
++
++    def add_cluster (self, cluster, patterns):
++        for pattern in patterns:
++            if "@" in pattern:
++                (localpart, domain) = pattern.split("@")
++            else:
++                localpart = pattern
++                domain = "*"
++            self.patterns.append((localpart, domain, cluster))
++
++    def get_cluster (self, recip):
++        recip = self.aliases.get_alias(recip)
++        if self.aliases.is_personal(recip):
++            #return "personal." + recip
++            return "personal"
++
++        cluster = self.recip_cache.get(recip)
++        if cluster:
++            return cluster
++
++        (localpart, domain) = recip.split("@")
++        #print "address: (%r, %r)" % (localpart, domain)
++        match = 0
++        for (localpart_pattern, domain_pattern, cluster) in self.patterns:
++            #print "  %s? (%r, %r):" % (cluster, localpart_pattern, domain_pattern),
++            if (fnmatch(localpart, localpart_pattern) and
++                fnmatch(domain, domain_pattern)):
++                match = 1
++                #print "match!"
++                break
++            #else:
++            #    print "no match"
++        else:
++            cluster = "default"
++
++        self.recip_cache[recip] = cluster
++        return cluster
++
++    def dump (self):
++        # Invert the recip_cache dict, which maps recipient to
++        # cluster name.
++        cluster_recips = {}
++        for (recip, cluster) in self.recip_cache.iteritems():
++            cluster_recips.setdefault(cluster, []).append(recip)
++
++        clusters = cluster_recips.keys()
++        clusters.sort()
++        for cluster in clusters:
++            print "%s:" % cluster
++            for addr in cluster_recips[cluster]:
++                print "  %s" % addr
++
++# class Clusters
++
++def get_dbfile (cluster):
++    return os.path.join(SPAMBAYES_BASEDIR, SPAMBAYES_DBDIR, cluster + ".db")
++
++def local_scan (info, headers, fd, msg=None):
++    # Import spambayes and load the config file (unfortunately,
++    # those are inseparable).
++    os.environ['BAYESCUSTOMIZE'] = os.path.join(SPAMBAYES_BASEDIR,
++                                                SPAMBAYES_GLOBAL_CONFIG)
++    from spambayes.Options import options
++    from spambayes.hammie import open
++    from spambayes.tokenizer import tokenize
++
++    # Read the aliases file so we know about equivalent recipient
++    # addresses.  XXX should probably put the aliases into a CDB!
++    aliases = Aliases()
++    aliases.read_aliases("python.org", "/etc/exim/aliases-python")
++    aliases.read_aliases("zope.org", "/etc/exim/aliases-zope")
++
++    # Map recipients to clusters (ie. training corpora), hopefully to
++    # minimize the number of times we have to score the message.
++    cluster_file = os.path.join(SPAMBAYES_BASEDIR, SPAMBAYES_CLUSTER_FILE)
++    clusters = Clusters(cluster_file, aliases)
++    cluster_score = {}
++
++    # Parse (if necessary) and tokenize the message.  NB. spambayes'
++    # rules for parsing a message, in particular how invalid messages
++    # are handled, are subtly different from those in
++    # elspy.util.parse_message() -- see
++    # spambayes.mboxutils.get_message().  Hmmmm.)
++    if msg is None:
++        msg = parse_message(headers, fd)
++    tokens = list(tokenize(msg))
++
++    # Now loop over all recipients, scoring the message for each one
++    # (since each recipient can have a different training corpus and
++    # therefore a different database).
++    all_probs = []
++    num_ok = num_spam = num_unsure = 0
++    #print "recipients:", info.recipients_list
++    for recip in info.recipients_list:
++        cluster = clusters.get_cluster(recip)
++        prob = cluster_score.get(cluster)
++
++        # Not yet seen by a recipient in this cluster: must score.
++        if prob is None:
++            #print "training with %r cluster:" % cluster,
++            hammie = open(get_dbfile(cluster))
++            prob = hammie.bayes.spamprob(tokens)
++            #print "%.3f" % prob
++            all_probs.append(prob)
++            if prob < options.ham_cutoff:     # definitely not spam
++                num_ok += 1
++            elif prob > options.spam_cutoff:  # definitely spam
++                num_spam += 1
++            else:
++                num_unsure += 1
++            cluster_score[cluster] = prob
++
++    num_clusters = len(cluster_score)
++    assert num_ok + num_spam + num_unsure == num_clusters, \
++           ("status counts don't add up (%d + %d + %d != %d)" %
++            (num_ok, num_spam, num_unsure, num_clusters))
++
++    # It's spam for all recipients: reject it.
++    if num_spam == num_clusters:
++        status = "SPAM"
++        reject_msg = "message rejected -- looks like spam"
++        log_msg = None
++        save_folder = "spam"
++
++    # It's ham for all recipients: accept it.
++    elif num_ok == num_clusters:
++        status = "OK"
++        reject_msg = None
++        log_msg = None
++        save_folder = None
++
++    # Otherwise, it's a mix: could be some ham/some spam/some unsure, or
++    # all unsure: log to rejectlog, but still accept it.
++    else:
++        status = "UNSURE"
++        reject_msg = None
++        log_msg = "unsure if spam -- accepting (and saving)"
++        save_folder = "unsure"
++
++    # Add the X-Spam-Status header (status and all probabilities).
++    #all_probs = ", ".join(["%.3f" % prob for prob in all_probs])
++    all_probs = ", ".join(["%s %.3f" % clusterprob
++                           for clusterprob in cluster_score.items()])
++    status = "%s (%s)" % (status, all_probs)
++    headers.add("X-Spam-Status", status)
++    log_write(LOG_MAIN, "scored with spambayes: %s" % all_probs)
++
++    # Optionally log the message (suppress if rejecting it, because
++    # we wouldn't want to log the same message twice).
++    if log_msg and not reject_msg:
++        log_write(LOG_REJECT, log_msg + ": " + status)
++
++    # Optionally save the message.
++    if save_folder and SPAMBAYES_SAVEDIR:
++        save_folder = os.path.join(
++            SPAMBAYES_BASEDIR, SPAMBAYES_SAVEDIR, save_folder)
++        save_message(save_folder, headers, fd,
++                     info.recipients_list, info.sender_address, umask=002)
++
++    # Optionally reject the message.
++    if reject_msg:
++        raise RejectSpam(reject_msg)
+diff -urN elspy-0.1.1.org/lib/subject_charset.py elspy-0.1.1/lib/subject_charset.py
+--- elspy-0.1.1.org/lib/subject_charset.py	1970-01-01 01:00:00.000000000 +0100
++++ elspy-0.1.1/lib/subject_charset.py	2002-10-23 20:09:55.000000000 +0200
+@@ -0,0 +1,48 @@
++"""elspy.subject_charset
++
++Reject mail based on the charset used in the "Subject" header.  A simple
++form of this can be done with an ACL, but I needed to get fancy by
++exempting certain senders and recipients.  IMHO the easiest and cleanest
++way to do that was to implement it as a Python local_scan().
++"""
++
++__revision__ = "$Id$"
++
++import re
++from elspy import RejectMessage
++
++# Any message from a sender in EXEMPT_SENDERS will skip the
++# "banned charset" check.  The addresses here must be all
++# lowercase.
++EXEMPT_SENDERS = []
++
++# A message with *any* recipients in EXEMPT_RECIPIENTS will also
++# skip the "banned charset" check.  Again, these addresses must
++# be all lowercase.
++EXEMPT_RECIPIENTS = []
++
++# Finally, the charsets to ban -- the only mail I ever see encoded in
++# one of these charsets is spam.  If your site ordinarly receives mail
++# in Chinese, Korean, Russian, or Japanese, you'll have to come up with
++# your own list of charsets to ban (or not use this module).
++BANNED_CHARSETS = ["big5", "gb2312",
++                   "euc-kr", "ks_c_5601-1987",
++                   "koi8-r",
++                   "iso-2022-jp"]
++
++# Based on RFC 2047, section 2.
++_encoded_header_re = re.compile(r'=\?([\w\-]+)\?[QB]\?', re.IGNORECASE)
++
++def local_scan (info, headers, fd):
++    if info.sender_address.lower() in EXEMPT_SENDERS:
++        return
++    for recip in info.recipients_list:
++        if recip.lower() in EXEMPT_RECIPIENTS:
++            return
++
++    subject = headers.get("subject", "")
++    match = _encoded_header_re.search(subject)
++    if match:
++        charset = match.group(1)
++        if charset.lower() in BANNED_CHARSETS:
++            raise RejectMessage("banned charset in subject: %s" % charset)
+diff -urN elspy-0.1.1.org/lib/util.py elspy-0.1.1/lib/util.py
+--- elspy-0.1.1.org/lib/util.py	2002-10-23 00:44:29.000000000 +0200
++++ elspy-0.1.1/lib/util.py	2004-04-22 02:53:34.000000000 +0200
+@@ -9,7 +9,7 @@
+ #
+ # The elspy home page is at http://elspy.sourceforge.net/ .
+ 
+-__revision__ = "$Id$"
++__revision__ = "$Id$"
+ 
+ import os
+ from types import StringType
+@@ -17,6 +17,14 @@
+      log_write, header_add, LOG_MAIN, \
+      LOCAL_SCAN_ACCEPT, LOCAL_SCAN_TEMPREJECT, LOCAL_SCAN_REJECT
+ 
++__all__ = ['HeaderList', 'EximInfo', 'MessageDisposition',
++           'AcceptMessage', 'TempRejectMessage', 'RejectMessage',
++           'RejectSpam', 'RejectVirus', 'RejectVirusRelated',
++           'log_error', 'log_warning',
++           'get_fdpos', 'set_fdpos',
++           'transfer_data', 'read_data',
++           'parse_message']
++
+ 
+ class HeaderList:
+ 
+@@ -26,7 +34,8 @@
+             self._addline(text)
+ 
+     def _addline (self, text):
+-        self._headers.append(tuple(text.split(":", 1)))
++        if text is not None:
++            self._headers.append(tuple(text.split(":", 1)))
+ 
+     def __str__ (self):
+         num = len(self._headers)
+@@ -80,7 +89,7 @@
+ 
+     def add (self, name, value):
+         sp = nl = ""
+-        if value and value[0] not in " \t":
++        if not value or value[0] not in " \t":
+             sp = " "
+         if not value or value[-1] != "\n":
+             nl = "\n"
+@@ -126,6 +135,30 @@
+ class RejectMessage (MessageDisposition):
+     disposition = LOCAL_SCAN_REJECT
+ 
++# These three subclasses of RejectMessage are handy if you want to track
++# *why* mail is being rejected without groping around in the rejection
++# message.
++class RejectSpam (RejectMessage):
++    """
++    Reject a message because it is (or appears to be) spam,
++    ie. unsolicited bulk email.
++    """
++    pass
++
++class RejectVirus (RejectMessage):
++    """
++    Reject a message because it is (or appears to be) carrying
++    an email virus.
++    """
++    pass
++
++class RejectVirusRelated (RejectMessage):
++    """
++    Reject a message because it is (or appears to be) virus-related
++    junk, such as a defanged virus, or a "we stopped a virus for/from
++    you" message from a misguided virus detector.
++    """
++    pass
+ 
+ def log_error (msg):
+     log_write(LOG_MAIN, "error: " + msg)
+@@ -141,7 +174,7 @@
+ def set_fdpos (fd, pos):
+     """Set the file offset for OS-level file descriptor 'fd'."""
+     os.lseek(fd, pos, 0)
+-    
++
+ 
+ def transfer_data (in_fd, out_fd):
+     """Read data from in_fd and write it to out_fd.
+@@ -155,3 +188,88 @@
+         while n < len(data):
+             n += os.write(out_fd, data[n:])
+     os.fsync(out_fd)
++
++def read_data (in_fd):
++    """
++    Read all data from in_fd and return it as a single string.  Current
++    file offset for in_fd is left unchanged.
++    """
++    chunksize = 16*1024
++    chunks = []
++    pos = get_fdpos(in_fd)
++    try:
++        while 1:
++            data = os.read(in_fd, chunksize)
++            if not data:
++                break
++            chunks.append(data)
++    finally:
++        set_fdpos(in_fd, pos)
++    return "".join(chunks)
++
++
++def message_tostring (headers, fd):
++    """
++    Return a single string containing a complete RFC 2822 message:
++    headers, blank line, body.
++    """
++    return headers.as_string() + "\n" + read_data(fd)
++
++def parse_message (headers, fd, onerror="raise"):
++    """
++    Completely parse a message whose headers are in 'headers' and
++    whose body is waiting to be read from 'fd'.  Return an
++    email.Message.Message object.
++    """
++    #from email import message_from_string
++    from email.Parser import Parser, HeaderParser
++    from email.Errors import MessageParseError
++
++    # XXX would be nice to do this in a more stream-like, memory-
++    # efficient way!
++    msg_str = message_tostring(headers, fd)
++    for parser_klass in (Parser, HeaderParser):
++        parser = parser_klass(strict=0)
++        err = None
++        try:
++            msg = parser.parsestr(msg_str)
++            break
++        except MessageParseError, err:
++            pass
++    else:
++        raise RuntimeError, "should never reach this point"
++
++    # If all parsers failed to parse the message, bomb (or something).
++    if err:
++        if onerror == "raise":
++            raise
++
++        error = "unable to parse message (%s)" % err
++        if onerror == "accept":
++            raise AcceptMessage(error + "forcing acceptance")
++        elif onerror == "tempreject":
++            raise TempRejectMessage(error)
++        elif onerror == "reject":
++            raise RejectMessage(error)
++
++    return msg
++
++def save_message (folder,
++                  headers, fd,
++                  recips, sender,
++                  umask=077):
++    from elspy.maildir import Maildir
++
++    mdir = Maildir(folder,
++                   dir_mode=0777 & ~umask,
++                   file_mode=0666 & ~umask)
++    msgfile = mdir.open_message()
++    pos = get_fdpos(fd)
++    try:
++        msgfile.write("Return-Path: <%s>\n" % sender)
++        msgfile.write("Envelope-To: %s\n" % ", ".join(recips))
++        mdir.write_message(headers, fd, msgfile)
++        mdir.close_message(msgfile)
++    finally:
++        msgfile.cleanup()
++        set_fdpos(fd, pos)
+diff -urN elspy-0.1.1.org/setup.py elspy-0.1.1/setup.py
+--- elspy-0.1.1.org/setup.py	2002-10-23 00:55:30.000000000 +0200
++++ elspy-0.1.1/setup.py	2003-04-09 00:57:56.000000000 +0200
+@@ -1,11 +1,11 @@
+ #!/usr/bin/python
+ 
+-__revision__ = "$Id$"
++__revision__ = "$Id$"
+ 
+ from distutils.core import setup
+ 
+ setup(name = "elspy",
+-      version = "0.1.1",
++      version = "0.2pre",
+       author = "Greg Ward",
+       author_email = "gward@python.net",
+       url = "http://elspy.sourceforge.net/",
+diff -urN elspy-0.1.1.org/test/test_many.py elspy-0.1.1/test/test_many.py
+--- elspy-0.1.1.org/test/test_many.py	2002-10-21 22:39:29.000000000 +0200
++++ elspy-0.1.1/test/test_many.py	2003-06-15 21:52:32.000000000 +0200
+@@ -1,9 +1,9 @@
+-#!/usr/bin/python2.1
++#!/usr/bin/python
+ 
+ # Pass a whole bunch of messages (one per file) through a single
+ # local_scan() function, and report the results.
+ 
+-__revision__ = "$Id$"
++__revision__ = "$Id$"
+ 
+ import sys, os
+ from optik import OptionParser
+@@ -18,8 +18,17 @@
+ 
+ def main ():
+     
+-    usage = "%prog test_module msgfile [...]"
++    usage = "%prog [-q] [-a] [-r] test_module msgfile [...]"
+     parser = OptionParser(usage)
++    parser.set_defaults(show="all")
++    parser.add_option("-q", "--quiet", action="store_true", dest='quiet',
++                      help="show filenames only (not outcomes)")
++    parser.add_option("-a", "--accepted",
++                      action="store_const", dest="show", const="accepted",
++                      help="show only accepted messages")
++    parser.add_option("-r", "--rejected",
++                      action="store_const", dest="show", const="rejected",
++                      help="show only rejected messages")
+     (options, args) = parser.parse_args()
+     if not len(args) >= 2:
+         parser.error("not enough arguments")
+@@ -31,7 +40,7 @@
+     local_scan = get_local_scan(mod)
+ 
+     for filename in filenames:
+-        write(filename + " ")
++        write(filename)
+         (info, headers, fd) = create_message(filename)
+         try:
+             text = local_scan(info, headers, fd)
+@@ -41,7 +50,10 @@
+             what = "accepted"
+             text = massage_text(text, 30)
+ 
+-        write("%s: %s\n" % (what, text))
++        if options.show == "all" or options.show == what:
++            if not options.quiet:
++                write(" %s: %s" % (what, text))
++        write("\n")
+         os.close(fd)
+ 
+ try:
+diff -urN elspy-0.1.1.org/test/test_message.py elspy-0.1.1/test/test_message.py
+--- elspy-0.1.1.org/test/test_message.py	2002-10-21 22:39:29.000000000 +0200
++++ elspy-0.1.1/test/test_message.py	2004-03-27 23:09:00.000000000 +0100
+@@ -1,4 +1,4 @@
+-#!/usr/bin/python2.1
++#!/usr/bin/python
+ 
+ # Construct a fake local_scan() environment and pass it to
+ # a real local_scan() function.
+@@ -7,7 +7,7 @@
+ #
+ # test_module may be either a module name or a filename
+ 
+-__revision__ = "$Id$"
++__revision__ = "$Id$"
+ 
+ import sys, os
+ import time
+@@ -17,12 +17,12 @@
+ from test_util import \
+      get_module, get_local_scan, create_message, interpret_disposition
+ 
+-sys.excepthook = elspy.old_excepthook
+-
+ def main ():
++    usage = "usage: %s test_module msg_file\n"
++    prog = os.path.basename(sys.argv[0])
+     args = sys.argv[1:]
+     if len(args) != 2:
+-        sys.exit("error: incorrect number of arguments")
++        sys.exit(usage % prog + "\nerror: incorrect number of arguments")
+ 
+     (test_module, msg_filename) = args
+     mod = get_module(test_module)
+diff -urN elspy-0.1.1.org/test/test_util.py elspy-0.1.1/test/test_util.py
+--- elspy-0.1.1.org/test/test_util.py	2002-10-20 23:49:03.000000000 +0200
++++ elspy-0.1.1/test/test_util.py	2003-04-09 00:53:40.000000000 +0200
+@@ -11,7 +11,7 @@
+      get_fdpos, set_fdpos, transfer_data
+ 
+ 
+-__revision__ = "$Id$"
++__revision__ = "$Id$"
+ 
+ 
+ def get_module (name):
+@@ -87,7 +87,7 @@
+                      "sender_host_name" : None,
+                      "sender_host_port" : None,
+                      })
+-                    
++
+     # And fill in what we can from the headers.
+     sender = msg.get('return-path') or msg.get('envelope-from')
+     if not sender and msg.unixfrom:
+@@ -104,12 +104,13 @@
+ 
+     # Could probably parse the first "Received" header and fill in
+     # a lot of the other fields in 'info', but why bother?
+-    
++
++    return info
+ 
+ def create_message (filename):
+-    """(filename : string) -> (body_fd : int,
++    """(filename : string) -> (info : EximInfo,
+                                headers : HeaderList,
+-                               info : EximInfo)
++                               body_fd : int)
+ 
+     Read an RFC 2822 message from 'filename', and create the
+     (info, headers, fd) triple that elspy normally passes to local_scan().
