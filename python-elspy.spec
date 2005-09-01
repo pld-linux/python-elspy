@@ -9,6 +9,7 @@ License:	GPL
 Group:		Libraries/Python
 Source0:	http://elspy.sourceforge.net/%{module}-%{version}.tar.gz
 # Source0-md5:	5161553b58eedf8107048d0cd79c2360
+Patch0:		%{name}-cvs20050901.patch
 URL:		http://elspy.sourceforge.net/
 BuildRequires:	exim-devel
 %pyrequires_eq	python-libs
@@ -24,6 +25,7 @@ simple-but-effective virus detector.
 
 %prep
 %setup -q -n %{module}-%{version}
+%patch0 -p1
 
 %build
 %{__cc} %{rpmcflags} %{rpmldflags} -fPIC -I%{_includedir}/exim -I%{_includedir}/python2.4 \
