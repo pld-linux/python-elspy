@@ -28,7 +28,8 @@ simple-but-effective virus detector.
 %patch0 -p1
 
 %build
-%{__cc} %{rpmcflags} %{rpmldflags} -fPIC -I%{_includedir}/exim -I%{_includedir}/python2.4 \
+%{__cc} -DDLOPEN_LOCAL_SCAN=1 %{rpmcflags} %{rpmldflags} -fPIC \
+	-I%{_includedir}/exim -I%{_includedir}/python2.4 \
         -lpython -shared %{module}.c -o %{module}.so
 
 %install
