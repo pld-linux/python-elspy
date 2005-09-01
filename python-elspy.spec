@@ -37,6 +37,6 @@ rm -rf $RPM_BUILD_ROOT
 
 %files
 %defattr(644,root,root,755)
-%doc examples/*.py
+%doc examples/*.py README.txt CHANGES.txt
 %dir %{py_sitescriptdir}/%{module}
 %attr(755,root,root) %{py_sitescriptdir}/%{module}/*.py[co]
