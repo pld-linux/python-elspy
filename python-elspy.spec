@@ -4,7 +4,7 @@
 Summary:	Allows to write Python code to scan email messages at SMTP-time with the Exim MTA
 Name:		python-%{module}
 Version:	0.1.1
-Release:	1
+Release:	2
 License:	GPL
 Group:		Libraries/Python
 Source0:	http://elspy.sourceforge.net/%{module}-%{version}.tar.gz
@@ -51,5 +51,5 @@ rm -rf $RPM_BUILD_ROOT
 %defattr(644,root,root,755)
 %doc examples/*.py README.txt CHANGES.txt doc/API.txt
 %dir %{py_sitescriptdir}/%{module}
-%attr(755,root,root) %{py_sitescriptdir}/%{module}/*.py[co]
+%{py_sitescriptdir}/%{module}/*.py[co]
 %attr(755,root,root) %{_libdir}/exim/%{module}.so
