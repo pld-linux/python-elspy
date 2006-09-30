@@ -5,7 +5,7 @@ Summary:	Allows to write Python code to scan email messages at SMTP-time with th
 Summary(pl):	Modu³ umo¿liwiaj±cy pisanie kodu pythonowego skanuj±cego wiadomo¶ci w czasie SMTP w Eximie
 Name:		python-%{module}
 Version:	0.1.1
-Release:	3
+Release:	4
 License:	GPL
 Group:		Libraries/Python
 Source0:	http://elspy.sourceforge.net/%{module}-%{version}.tar.gz
@@ -40,7 +40,7 @@ wykrywaczem wirusów.
 
 %build
 %{__cc} -Wall -DDLOPEN_LOCAL_SCAN=1 %{rpmcflags} %{rpmldflags} -fPIC \
-	-I%{_includedir}/exim -I%{_includedir}/python2.4 \
+	-I%{_includedir}/exim -I%{_includedir}/python%{py_ver} \
         -lpython -shared %{module}.c -o %{module}.so
 
 %install
