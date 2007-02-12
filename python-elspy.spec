@@ -2,7 +2,7 @@
 %define 	module	elspy
 
 Summary:	Allows to write Python code to scan email messages at SMTP-time with the Exim MTA
-Summary(pl):	Modu³ umo¿liwiaj±cy pisanie kodu pythonowego skanuj±cego wiadomo¶ci w czasie SMTP w Eximie
+Summary(pl.UTF-8):   ModuÅ‚ umoÅ¼liwiajÄ…cy pisanie kodu pythonowego skanujÄ…cego wiadomoÅ›ci w czasie SMTP w Eximie
 Name:		python-%{module}
 Version:	0.1.1
 Release:	4
@@ -25,13 +25,13 @@ agent). elspy also includes a small Python library with common
 mail-scanning tools, including an interface to SpamAssassin and a
 simple-but-effective virus detector.
 
-%description -l pl
-elspy to warstwa kodu sklejaj±cego pozwalaj±cego na pisanie w Pythonie
-kodu do skanowania przesy³ek pocztowych w czasie SMTP przy u¿yciu
-Exima jako MTA (mail transport agent). elspy zawiera tak¿e ma³±
-bibliotekê pythonow± z popularnymi narzêdziami do skanowania poczty,
-w³±cznie z interfejsem do SpamAssassina i prostym lecz efektywnym
-wykrywaczem wirusów.
+%description -l pl.UTF-8
+elspy to warstwa kodu sklejajÄ…cego pozwalajÄ…cego na pisanie w Pythonie
+kodu do skanowania przesyÅ‚ek pocztowych w czasie SMTP przy uÅ¼yciu
+Exima jako MTA (mail transport agent). elspy zawiera takÅ¼e maÅ‚Ä…
+bibliotekÄ™ pythonowÄ… z popularnymi narzÄ™dziami do skanowania poczty,
+wÅ‚Ä…cznie z interfejsem do SpamAssassina i prostym lecz efektywnym
+wykrywaczem wirusÃ³w.
 
 %prep
 %setup -q -n %{module}-%{version}
