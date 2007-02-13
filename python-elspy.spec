@@ -2,7 +2,7 @@
 %define 	module	elspy
 
 Summary:	Allows to write Python code to scan email messages at SMTP-time with the Exim MTA
-Summary(pl.UTF-8):   Moduł umożliwiający pisanie kodu pythonowego skanującego wiadomości w czasie SMTP w Eximie
+Summary(pl.UTF-8):	Moduł umożliwiający pisanie kodu pythonowego skanującego wiadomości w czasie SMTP w Eximie
 Name:		python-%{module}
 Version:	0.1.1
 Release:	4
