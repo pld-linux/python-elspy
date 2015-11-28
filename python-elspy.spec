@@ -47,9 +47,7 @@ wykrywaczem wirusów.
 rm -rf $RPM_BUILD_ROOT
 install -d $RPM_BUILD_ROOT%{_libdir}/exim
 
-python setup.py install \
-	--root=$RPM_BUILD_ROOT \
-	--optimize=2
+%py_install
 
 install %{module}.so $RPM_BUILD_ROOT%{_libdir}/exim
 
