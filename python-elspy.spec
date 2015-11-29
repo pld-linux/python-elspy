@@ -13,6 +13,7 @@ Source0:	http://elspy.sourceforge.net/%{module}-%{version}.tar.gz
 Patch0:		%{name}-cvs20050901.patch
 Patch1:		%{name}-mailpath.patch
 URL:		http://elspy.sourceforge.net/
+BuildRequires:	rpmbuild(macros) >= 1.710
 BuildRequires:	exim-devel
 %pyrequires_eq	python-libs
 Requires:	exim >= 4.52-4
